@@ -521,7 +521,11 @@ class QueryCursor {
 			url.searchParams.append('session_id', me.opts.sessionId);
 		}
 		
-		url.searchParams.append('query', query);
+		if (query.trim().toUpperCase().startsWith('SELECT')) {
+			params.body = query;
+		} else {
+			url.searchParams.append('query', query);
+		}
 		
 		if (me.connection.isUseGzip) {
 			params.headers['Accept-Encoding']  = 'gzip';
