@@ -449,6 +449,9 @@ class QueryCursor {
 		if (database) {
 			configQS.database = database;
 		}
+		if (me.opts && me.opts.database) { // 20210227 accept database params in query
+			configQS.database = me.opts.database;
+		}
 		
 		const url = new URL(me.connection.url);
 		
