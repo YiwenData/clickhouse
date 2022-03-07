@@ -425,6 +425,13 @@ describe('TLS/SSL Protocol', () => {
 			throw err;
 		}
 	});
+	it('default HTTPS port is 433', async () => {
+		const clickhouse = new ClickHouse({
+			...config,
+			url       : 'https://localhost'
+		});
+		expect(clickhouse.opts.url).to.match(/localhost\//);
+	});
 });
 
 describe('queries', () => {
@@ -466,7 +473,63 @@ describe('queries', () => {
 		).toPromise();
 		expect(r2).to.be.ok();
 	});
+
+	it('insert field as raw string', async () => {
+		clickhouse.sessionId = Date.now();
+		
+		const r = await clickhouse.query(`
+			CREATE TABLE IF NOT EXISTS test_raw_string (
+				date Date,
+				str String,
+				arr Array(String),
+				arr2 Array(Date),
+				arr3 Array(UInt8),
+				fixedStr String
+			) ENGINE=MergeTree(date, date, 8192)
+		`).toPromise();
+		expect(r).to.be.ok();
+		
+		const rows = [
+			'(\'2018-01-01 10:00:00\',\'Вам, проживающим за оргией оргию,\',[],[\'1915-01-02 10:00:00\',\'1915-01-03 10:00:00\'],[1,2,3,4,5],unhex(\'60ed56e75bb93bd353267faa\'))',
+			'(\'2018-02-01 10:00:00\',\'имеющим ванную и теплый клозет!\',[\'5670000000\',\'asdas dasf\'],[\'1915-02-02 10:00:00\'],[],unhex(\'60ed56f4a88cd5dcb249d959\'))'
+		];
+		
+		const r2 = await clickhouse.insert(
+			'INSERT INTO test_raw_string (date, str, arr, arr2, arr3, fixedStr) VALUES',
+			rows
+		).toPromise();
+		expect(r2).to.be.ok();
+	});
 	
+	it('insert stream accept raw string', async () => {
+		clickhouse.sessionId = Date.now();
+		
+		const r = await clickhouse.query(`
+			CREATE TABLE IF NOT EXISTS test_insert_stream_raw_string (
+				date Date,
+				str String,
+				arr Array(String),
+				arr2 Array(Date),
+				arr3 Array(UInt8),
+				fixedStr FixedString(12)
+			) ENGINE=MergeTree(date, date, 8192)
+		`).toPromise();
+		expect(r).to.be.ok();
+		
+		const rows = [
+			'(\'2018-01-01 10:00:00\',\'Вам, проживающим за оргией оргию,\',[],[\'1915-01-02 10:00:00\',\'1915-01-03 10:00:00\'],[1,2,3,4,5],unhex(\'60ed56e75bb93bd353267faa\'))',
+			'(\'2018-02-01 10:00:00\',\'имеющим ванную и теплый клозет!\',[\'5670000000\',\'asdas dasf\'],[\'1915-02-02 10:00:00\'],[],unhex(\'60ed56f4a88cd5dcb249d959\'))'
+		];
+		
+		const stream = await clickhouse.insert(
+			'INSERT INTO test_insert_stream_raw_string (date, str, arr, arr2, arr3, fixedStr) VALUES',
+		).stream();
+		stream.writeRow(rows[0]);
+		stream.writeRow(rows[1]);
+		const r2 = await stream.exec();
+		expect(r2).to.be.ok();
+	});
+
 	it('select, insert and two pipes', async () => {
 		const result = await clickhouse.query('DROP TABLE IF EXISTS session_temp').toPromise();
 		expect(result).to.be.ok();
@@ -529,7 +592,6 @@ describe('queries', () => {
 		const result8 = await rs.pipe(tf).pipe(ws2).exec();
 		expect(result8).to.be.ok();
 		clickhouse.isUseGzip = false;
-		
 		const result9 = await clickhouse.query('SELECT count(*) AS count FROM session_temp').toPromise();
 		const result10 = await clickhouse.query('SELECT count(*) AS count FROM session_temp2').toPromise();
 		expect(result9).to.eql(result10);
@@ -875,6 +937,15 @@ describe('Select and WITH TOTALS statement', () => {
 		expect(result.rows).to.be(LIMIT_COUNT);
 		expect(result).to.have.key('statistics');
 	});
+
+	it('start with WITH', async() => {
+		const r = await clickhouse.query(`
+			WITH x as (SELECT 1) SELECT * FROM x
+		`).toPromise();
+
+		expect(r).to.be.ok();
+		expect(r[0]).to.be.eql({1: 1});
+	});
 });
 
 describe('Abort query', () => {
@@ -907,6 +978,42 @@ describe('Abort query', () => {
 		setTimeout(() => $q.destroy(), 10 * 1000);
 	});
 });
+
+describe('Raw response', () => {
+	it('"raw" parameter should return response as a raw CSV/TSV/JSON string', async () => {
+		const tableName = 'test_raw_response';
+		const insertValues = [
+			{id: 'fm', name: 'Freddie Mercury', age: 45},
+			{id: 'js', name: 'John Lennon', age: 40},
+			{id: 'ep', name: 'Elvis Presley', age: 42},
+		];
+		
+		const createResponse = await clickhouse.query(`
+			CREATE TABLE IF NOT EXISTS ${tableName} (id String, name String, age UInt8) ENGINE = MergeTree() ORDER BY id;
+		`).toPromise();
+		expect(createResponse).to.be.ok();
+
+		const insertResponse = await clickhouse.insert(`INSERT INTO ${tableName} (id, name, age)`, insertValues).toPromise();
+		expect(insertResponse).to.be.ok();
+
+		for (const format of ['csv', 'tsv', 'json']) {
+			const rawClient = new ClickHouse({...config, database, raw: true, format});
+			const result = await rawClient.query(`SELECT * FROM ${tableName}`).toPromise();
+			expect(typeof result).to.be.equal('string');
+
+			let data = rawClient.bodyParser(result);
+			format === 'json' && ({data} = data);
+			expect(data.length).to.be.equal(insertValues.length);
+			
+			for (const insertValue of insertValues) {
+				const resultValue = data.find(el => el.id === insertValue.id);
+				expect(resultValue).not.to.be.empty();
+				expect(resultValue).to.be.eql(insertValue);
+			}
+		}
+
+	})
+})
 
 after(async () => {
 	await clickhouse.query(`DROP DATABASE IF EXISTS ${database}`).toPromise();
