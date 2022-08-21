@@ -588,14 +588,15 @@ class QueryCursor {
 			}
 
 			try {
-				const data = this.opts.raw ? res.body : me.getBodyParser()(res.body);
+				const raw = this.opts.raw || this.raw;
+				const data = raw ? res.body : me.getBodyParser()(res.body);
 				
 				if (me.format === FORMAT_NAMES.JSON) {
 					if (me.useTotals) {
 						return cb(null, data);
 					}
 					
-					return this.opts.raw ? cb(null, data) : cb(null, data.data);
+					return raw ? cb(null, data) : cb(null, data.data);
 				}
 				
 				if (me.useTotals) {
